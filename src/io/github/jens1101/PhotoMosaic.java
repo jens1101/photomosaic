@@ -1,6 +1,7 @@
 package io.github.jens1101;
 
 import java.awt.Color;
+import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -14,6 +15,13 @@ import java.util.stream.Stream;
 import javax.imageio.ImageIO;
 
 public class PhotoMosaic {
+    private static final int MIN_TILES_PER_SIDE = 20;
+
+    /**
+     * Standard daylight reference values
+     */
+    private static final float[] XYZ_REFERENCE = {94.811f, 100.000f, 107.304f};
+
     public static void main(String[] args) {
         // If anything other than 3 arguments is given then print the usage of
         // this class.
@@ -22,25 +30,28 @@ public class PhotoMosaic {
             System.exit(1);
         }
 
-        File sourceImage = new File(args[0]);
+        File sourceImageFile = new File(args[0]);
         File imageLibraryDirectory = new File(args[1]);
 
         // Print an error if the source image doesn't exist
-        if (!sourceImage.exists()) {
-            System.out.println("Source image '" + sourceImage.getPath()
+        if (!sourceImageFile.exists()) {
+            System.err.println("Source image '" + sourceImageFile.getPath()
                     + "' not found");
             System.exit(2);
         }
 
         // Print an error if the image library directory doesn't exist.
         if (!imageLibraryDirectory.exists()) {
-            System.out.println("Image library directory '"
+            System.err.println("Image library directory '"
                     + imageLibraryDirectory.getPath() + "' not found");
             System.exit(3);
         }
 
         // Walk through all files within the image library directory
         try (Stream<Path> paths = Files.walk(imageLibraryDirectory.toPath())) {
+            // Interpret the source image file as an image
+            BufferedImage sourceImage = ImageIO.read(sourceImageFile);
+
             // Get all library images
             List<LibraryImage> allLibraryImages = paths
                     // Only traverse all regular files
@@ -61,6 +72,40 @@ public class PhotoMosaic {
                     .filter(Objects::nonNull)
                     .collect(Collectors.toList());
 
+            int tileSideLength = Math.min(sourceImage.getWidth(), sourceImage.getHeight())
+                    / MIN_TILES_PER_SIDE;
+
+            int numberOfTiles = (sourceImage.getWidth() / tileSideLength) *
+                    (sourceImage.getHeight() / tileSideLength);
+
+            // Print an error and quit if we don't have enough images for the
+            // mosaic.
+            if (allLibraryImages.size() < numberOfTiles) {
+                System.out.println("Not enough images found in the image " +
+                        "library to create the mosaic.\n" +
+                        numberOfTiles + " images required, but only " +
+                        allLibraryImages.size() + " images found");
+                return;
+            }
+
+            for (int x = 0; x + tileSideLength < sourceImage.getWidth(); x += tileSideLength) {
+                for (int y = 0; y + tileSideLength < sourceImage.getHeight(); y += tileSideLength) {
+                    Rectangle region = new Rectangle(x, y, tileSideLength,
+                            tileSideLength);
+
+                    float[] averageRgbColour = LibraryImage
+                            .averageColour(sourceImage, region)
+                            .getRGBColorComponents(null);
+
+                    float[] averageLabColour = ColorSpaceConverter
+                            .RGBtoCIELab(averageRgbColour, XYZ_REFERENCE);
+
+                    // TODO: for each tile find the closest matching image and remove the
+                    //  image from the pool so that images are not re-used.
+                    // TODO: add the matching image to the final mosaic
+                    // TODO: write the mosaic to the destination file
+                }
+            }
         } catch (IOException e) {
             // An error occurred while reading a file
             e.printStackTrace();
@@ -101,11 +146,32 @@ public class PhotoMosaic {
          * @return The average colour of the image.
          */
         public static Color averageColour(BufferedImage image) {
+            Rectangle region = new Rectangle(image.getWidth(), image.getHeight());
+            return averageColour(image, region);
+        }
+
+        /**
+         * Returns the average colour for the given region within the given
+         * buffered image.
+         *
+         * @param image  The source image to analyse.
+         * @param region The region within the image to analyse for average
+         *               colour.
+         * @return The average colour of the region within the image.
+         */
+        public static Color averageColour(BufferedImage image, Rectangle region) {
             long sumRed = 0;
             long sumGreen = 0;
             long sumBlue = 0;
-            for (int x = 0; x < image.getWidth(); x++) {
-                for (int y = 0; y < image.getHeight(); y++) {
+
+            int startX = (int) region.getX();
+            int endX = (int) (region.getX() + region.getWidth());
+
+            int startY = (int) region.getY();
+            int endY = (int) (region.getY() + region.getHeight());
+
+            for (int x = startX; x < endX; x++) {
+                for (int y = startY; y < endY; y++) {
                     Color pixel = new Color(image.getRGB(x, y));
                     sumRed += pixel.getRed();
                     sumGreen += pixel.getGreen();
@@ -113,7 +179,11 @@ public class PhotoMosaic {
                 }
             }
 
-            long resolution = image.getWidth() * image.getHeight();
+            double resolution = region.getWidth() * region.getHeight();
+            // TODO: it would be better to use a running average calculation.
+            //  The current algorithm can suffer from overflow.
+            // TODO: it would be better to only use floats, instead of casting
+            //  to int.
 
             return new Color((int) (sumRed / resolution),
                     (int) (sumGreen / resolution),
