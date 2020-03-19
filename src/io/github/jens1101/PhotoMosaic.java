@@ -1,6 +1,7 @@
 package io.github.jens1101;
 
 import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -15,45 +16,20 @@ import java.util.stream.Stream;
 import javax.imageio.ImageIO;
 
 public class PhotoMosaic {
-    private static final int MIN_TILES_PER_SIDE = 20;
+    // TODO: this can be an array
+    private final List<LibraryImage> allLibraryImages;
 
-    /**
-     * Standard daylight reference values
-     */
-    private static final float[] XYZ_REFERENCE = {94.811f, 100.000f, 107.304f};
+    // TODO: make the XYZ reference a class variable
 
-    public static void main(String[] args) {
-        // If anything other than 3 arguments is given then print the usage of
-        // this class.
-        if (args.length != 3) {
-            System.out.println("Usage: PhotoMosaic [SOURCE IMAGE PATH] [IMAGE LIBRARY DIRECTORY] [DESTINATION]");
-            System.exit(1);
-        }
-
-        File sourceImageFile = new File(args[0]);
-        File imageLibraryDirectory = new File(args[1]);
-
-        // Print an error if the source image doesn't exist
-        if (!sourceImageFile.exists()) {
-            System.err.println("Source image '" + sourceImageFile.getPath()
-                    + "' not found");
-            System.exit(2);
-        }
-
-        // Print an error if the image library directory doesn't exist.
+    public PhotoMosaic(File imageLibraryDirectory) throws IOException {
         if (!imageLibraryDirectory.exists()) {
-            System.err.println("Image library directory '"
+            throw new RuntimeException("Image library directory '"
                     + imageLibraryDirectory.getPath() + "' not found");
-            System.exit(3);
         }
 
-        // Walk through all files within the image library directory
         try (Stream<Path> paths = Files.walk(imageLibraryDirectory.toPath())) {
-            // Interpret the source image file as an image
-            BufferedImage sourceImage = ImageIO.read(sourceImageFile);
-
             // Get all library images
-            List<LibraryImage> allLibraryImages = paths
+            this.allLibraryImages = paths
                     // Only traverse all regular files
                     .filter(Files::isRegularFile)
                     // Map each file to a library image instance
@@ -70,46 +46,103 @@ public class PhotoMosaic {
                     })
                     // Remove all null values from the stream
                     .filter(Objects::nonNull)
+                    // Finally convert the stream to a list
                     .collect(Collectors.toList());
-
-            int tileSideLength = Math.min(sourceImage.getWidth(), sourceImage.getHeight())
-                    / MIN_TILES_PER_SIDE;
-
-            int numberOfTiles = (sourceImage.getWidth() / tileSideLength) *
-                    (sourceImage.getHeight() / tileSideLength);
-
-            // Print an error and quit if we don't have enough images for the
-            // mosaic.
-            if (allLibraryImages.size() < numberOfTiles) {
-                System.out.println("Not enough images found in the image " +
-                        "library to create the mosaic.\n" +
-                        numberOfTiles + " images required, but only " +
-                        allLibraryImages.size() + " images found");
-                return;
-            }
-
-            for (int x = 0; x + tileSideLength < sourceImage.getWidth(); x += tileSideLength) {
-                for (int y = 0; y + tileSideLength < sourceImage.getHeight(); y += tileSideLength) {
-                    Rectangle region = new Rectangle(x, y, tileSideLength,
-                            tileSideLength);
-
-                    float[] averageRgbColour = LibraryImage
-                            .averageColour(sourceImage, region)
-                            .getRGBColorComponents(null);
-
-                    float[] averageLabColour = ColorSpaceConverter
-                            .RGBtoCIELab(averageRgbColour, XYZ_REFERENCE);
-
-                    // TODO: for each tile find the closest matching image and remove the
-                    //  image from the pool so that images are not re-used.
-                    // TODO: add the matching image to the final mosaic
-                    // TODO: write the mosaic to the destination file
-                }
-            }
-        } catch (IOException e) {
-            // An error occurred while reading a file
-            e.printStackTrace();
         }
+    }
+
+    private static double[] toLabColour(Color color, double[] xyzReference) {
+        float[] averageRgbFloat = color.getRGBColorComponents(null);
+        double[] averageRgb = new double[]{
+                (double) averageRgbFloat[0],
+                (double) averageRgbFloat[1],
+                (double) averageRgbFloat[2]
+        };
+
+        return ColorSpaceConverter.RGBtoCIELab(averageRgb, xyzReference);
+    }
+
+    public void createMosaic(File sourceImageFile,
+                             File outputFile,
+                             int minTilesPerSide,
+                             double[] xyzReference) throws IOException {
+        if (!sourceImageFile.exists()) {
+            throw new RuntimeException("Source image '" +
+                    sourceImageFile.getPath() + "' not found");
+        }
+
+        // Interpret the source image file as an image
+        BufferedImage sourceImage = ImageIO.read(sourceImageFile);
+
+        int tileSideLength = Math.min(sourceImage.getWidth(), sourceImage.getHeight())
+                / minTilesPerSide;
+
+        int numberOfTilesWide = sourceImage.getWidth() / tileSideLength;
+        int numberOfTilesHigh = sourceImage.getHeight() / tileSideLength;
+        int totalNumberOfTiles = numberOfTilesHigh * numberOfTilesWide;
+
+        // Print an error and quit if we don't have enough images for the
+        // mosaic.
+        if (allLibraryImages.size() < totalNumberOfTiles) {
+            throw new RuntimeException("Not enough images found in the image " +
+                    "library to create the mosaic." + totalNumberOfTiles +
+                    " images required, but only " + allLibraryImages.size() +
+                    " images found");
+        }
+
+        BufferedImage outputImage = new BufferedImage(numberOfTilesWide * tileSideLength,
+                numberOfTilesHigh * tileSideLength,
+                BufferedImage.TYPE_INT_RGB);
+        Graphics2D outputImageGraphics = outputImage.createGraphics();
+
+        for (int x = 0; x + tileSideLength < sourceImage.getWidth(); x += tileSideLength) {
+            for (int y = 0; y + tileSideLength < sourceImage.getHeight(); y += tileSideLength) {
+                Rectangle region = new Rectangle(x, y, tileSideLength,
+                        tileSideLength);
+
+                Color averageColor = LibraryImage
+                        .averageColour(sourceImage, region);
+
+                LibraryImage closestImage =
+                        findClosestLibraryImage(averageColor, xyzReference);
+
+                // FIXME: I shouldn't modify this list of images. It will cause
+                //  issues if I call this function multiple times in succession.
+                this.allLibraryImages.remove(closestImage);
+
+                int closestImageSideLength = Math.min(closestImage.getImage().getWidth(), closestImage.getImage().getHeight());
+
+                outputImageGraphics.drawImage(closestImage.getImage(),
+                        x, y, x + tileSideLength, y + tileSideLength,
+                        0, 0, closestImageSideLength - 1, closestImageSideLength - 1,
+                        null);
+            }
+        }
+
+        ImageIO.write(outputImage, "png", outputFile);
+    }
+
+    private LibraryImage findClosestLibraryImage(Color averageColour,
+                                                 double[] xyzReference) {
+        double[] averageLabColour = toLabColour(averageColour, xyzReference);
+
+        LibraryImage closestImage = null;
+        double closestDeltaE = 0;
+
+        for (LibraryImage currentImage : this.allLibraryImages) {
+            double[] currentImageAverageLabColour = toLabColour(
+                    currentImage.getAverageColour(), xyzReference);
+
+            double currentDeltaE = ColorDifference.calculateDeltaE2000(
+                    averageLabColour, currentImageAverageLabColour);
+
+            if (closestImage == null || currentDeltaE < closestDeltaE) {
+                closestImage = currentImage;
+                closestDeltaE = currentDeltaE;
+            }
+        }
+
+        return closestImage;
     }
 
     /**
@@ -121,6 +154,8 @@ public class PhotoMosaic {
          * The file reference to the image itself.
          */
         private final File imageFile;
+
+        private final BufferedImage image;
 
         /**
          * The average colour of the image.
@@ -134,9 +169,8 @@ public class PhotoMosaic {
          */
         LibraryImage(File imageFile) throws IOException {
             this.imageFile = imageFile;
-
-            BufferedImage img = ImageIO.read(imageFile);
-            this.averageColour = LibraryImage.averageColour(img);
+            this.image = ImageIO.read(imageFile);
+            this.averageColour = LibraryImage.averageColour(this.image);
         }
 
         /**
@@ -190,7 +224,13 @@ public class PhotoMosaic {
                     (int) (sumBlue / resolution));
         }
 
+        public BufferedImage getImage() {
+            return image;
+        }
+
         public Color getAverageColour() {
+            // TODO: only calculate the average colour here and then memorize
+            //  it. This will make construction faster.
             return averageColour;
         }
 
