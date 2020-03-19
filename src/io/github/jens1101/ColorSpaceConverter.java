@@ -1,6 +1,11 @@
 package io.github.jens1101;
 
-// TODO: add documentation to this
+import java.awt.Color;
+
+/**
+ * This class contains helper functions to convert colours from one colour space
+ * representation to another.
+ */
 public class ColorSpaceConverter {
     /**
      * Private constructor to prevent directly instantiating this class
@@ -8,6 +13,14 @@ public class ColorSpaceConverter {
     private ColorSpaceConverter() {
     }
 
+    /**
+     * Converts the given array of RGB values to XYZ
+     *
+     * @param rgb An array of doubles with a length of 3. The 1st index
+     *            represents the red component, the 2nd represents the green
+     *            component, and the 3rd represents the blue component.
+     * @return The colour in the XYZ format.
+     */
     public static double[] RGBtoXYZ(double[] rgb) {
         double red = rgb[0];
         double green = rgb[1];
@@ -31,10 +44,35 @@ public class ColorSpaceConverter {
         return new double[]{x, y, z};
     }
 
-    public static double[] RGBtoCIELab(double[] rgb, double[] referenceXyz) {
-        return XYZtoCIELab(RGBtoXYZ(rgb), referenceXyz);
+    /**
+     * Converts the given array of RGB values to CIE L*ab
+     *
+     * @param color        The colour to convert.
+     * @param referenceXyz The reference illumination to be used when creating
+     *                     a mosaic.
+     * @return The colour in the CIE L*ab format.
+     */
+    public static double[] colorToCIELab(Color color, double[] referenceXyz) {
+        float[] averageRgbFloat = color.getRGBColorComponents(null);
+        double[] averageRgb = new double[]{
+                (double) averageRgbFloat[0],
+                (double) averageRgbFloat[1],
+                (double) averageRgbFloat[2]
+        };
+
+        return XYZtoCIELab(RGBtoXYZ(averageRgb), referenceXyz);
     }
 
+    /**
+     * Converts the given array of XYZ values to CIE L*ab
+     *
+     * @param xyz          An array of doubles with a length of 3. The 1st index
+     *                     represents the X component, the 2nd represents the
+     *                     Y component, and the 3rd represents the Z component.
+     * @param referenceXyz The reference illumination to be used when creating
+     *                     a mosaic.
+     * @return The colour in the CIE L*ab format.
+     */
     public static double[] XYZtoCIELab(double[] xyz, double[] referenceXyz) {
         double var_X = xyz[0] / referenceXyz[0];
         double var_Y = xyz[1] / referenceXyz[1];
